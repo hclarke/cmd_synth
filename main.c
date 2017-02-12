@@ -30,11 +30,13 @@ typedef enum {
 	mul,
 	add,
 	adsr,
+	cmd_list,
 } component_type;
 
 typedef struct component {
 	component_type type;
 	float value; //constants only
+	int start,count; //cmd_list only
 	struct component** inputs;
 	float* buffer;
 } component;
@@ -48,11 +50,22 @@ char* get_cmd(int i) {
 
 int stack_count = 0;
 component* stack[MAX_STACK];
+float sample_period;
+int sample_count;
 
-component* pop() {
+void execute(int start, int count);
+
+component* pop(int execute_popped) {
+	LOOP:
 	assert(stack_count > 0);
 	stack_count -= 1;
-	return stack[stack_count];
+
+	component* top = stack[stack_count];
+	if(execute_popped && cmd_list == top->type) {
+		execute(top->start, top->count);
+		goto LOOP;
+	}
+	return top;
 }
 
 component* peek() {
@@ -70,12 +83,12 @@ component* var_data[MAX_VARS];
 char* var_names[MAX_VARS];
 int var_count;
 
-float* eval(component* comp, float sample_period, int sample_count);
+float* eval(component* comp);
 float* alloc_buffer(int sample_count) {
 	return (float*)malloc(sizeof(float) * sample_count);
 }
 
-float* eval_constant(component* comp, float sample_period, int sample_count) {
+float* eval_constant(component* comp) {
 	float* b = comp->buffer = alloc_buffer(sample_count);
 	float value = comp->value;
 	for(int i = 0; i < sample_count; ++i) {
@@ -84,9 +97,9 @@ float* eval_constant(component* comp, float sample_period, int sample_count) {
 	return b;
 }
 
-float* eval_sin_wave(component* comp, float sample_period, int sample_count) {
+float* eval_sin_wave(component* comp) {
 	float* b = comp->buffer = alloc_buffer(sample_count);
-	float* f = eval(comp->inputs[0], sample_period, sample_count);
+	float* f = eval(comp->inputs[0]);
 	float t = 0;
 
 	for(int i = 0; i < sample_count; ++i) {
@@ -96,10 +109,10 @@ float* eval_sin_wave(component* comp, float sample_period, int sample_count) {
 	return b;
 }
 
-float* eval_mul(component* comp, float sample_period, int sample_count) {
+float* eval_mul(component* comp) {
 	float* b = comp->buffer = alloc_buffer(sample_count);
-	float* i0 = eval(comp->inputs[0], sample_period, sample_count);
-	float* i1 = eval(comp->inputs[1], sample_period, sample_count);
+	float* i0 = eval(comp->inputs[0]);
+	float* i1 = eval(comp->inputs[1]);
 
 	for(int i = 0; i < sample_count; ++i) {
 		b[i] = i0[i] * i1[i];
@@ -107,22 +120,23 @@ float* eval_mul(component* comp, float sample_period, int sample_count) {
 	return b;
 }
 
-float* eval_add(component* comp, float sample_period, int sample_count) {
+float* eval_add(component* comp) {
 	float* b = comp->buffer = alloc_buffer(sample_count);
-	float* i0 = eval(comp->inputs[0], sample_period, sample_count);
-	float* i1 = eval(comp->inputs[1], sample_period, sample_count);
+	float* i0 = eval(comp->inputs[0]);
+	float* i1 = eval(comp->inputs[1]);
 
 	for(int i = 0; i < sample_count; ++i) {
 		b[i] = i0[i] + i1[i];
 	}
 	return b;
 }
-float* eval_adsr(component* comp, float sample_period, int sample_count) {
+
+float* eval_adsr(component* comp) {
 	float* b = comp->buffer = alloc_buffer(sample_count);
-	float* A = eval(comp->inputs[3], sample_period, sample_count);
-	float* D = eval(comp->inputs[2], sample_period, sample_count);
-	float* S = eval(comp->inputs[1], sample_period, sample_count);
-	float* R = eval(comp->inputs[0], sample_period, sample_count);
+	float* A = eval(comp->inputs[3]);
+	float* D = eval(comp->inputs[2]);
+	float* S = eval(comp->inputs[1]);
+	float* R = eval(comp->inputs[0]);
 
 	float duration = sample_period * sample_count;
 
@@ -153,29 +167,43 @@ float* eval_adsr(component* comp, float sample_period, int sample_count) {
 	}
 	return b;
 }
-float* eval(component* comp, float sample_period, int sample_count) {
+
+float* eval(component* comp) {
 	if(comp->buffer) {
 		return comp->buffer;
 	}
 	switch(comp->type) {
 		case constant:
-			return eval_constant(comp, sample_period, sample_count);
+			return eval_constant(comp);
 		case sin_wave:
-			return eval_sin_wave(comp, sample_period, sample_count);
+			return eval_sin_wave(comp);
 		case mul:
-			return eval_mul(comp, sample_period, sample_count);
+			return eval_mul(comp);
 		case add:
-			return eval_add(comp, sample_period, sample_count);
+			return eval_add(comp);
 		case adsr:
-			return eval_adsr(comp, sample_period, sample_count);
+			return eval_adsr(comp);
+		case cmd_list:
+			assert(0);
 		default:
 			assert(0 && "unhandled type");
 	}
 }
 
-float* execute(float sample_period, int sample_count) {
-	for(int i = 0; i < token_count; ++i) {
+int braces;
+void execute(int start, int count) {
+	for(int i = start; i < start+count; ++i) {
 		char* cmd = get_cmd(i);
+		
+		if(braces > 0) {
+			if(cmd[0] == ']') {
+				braces -= 1;
+			}
+			else {
+				peek()->count += 1;
+			}
+			continue;
+		}
 		component* comp = (component*)malloc(sizeof(component));
 		assert(comp);
 		comp->buffer = NULL;
@@ -184,11 +212,18 @@ float* execute(float sample_period, int sample_count) {
 		if(1 == sscanf(cmd, "%f", &comp->value)) {
 			comp->type = constant;
 		}
+		else if(cmd[0] == '[') {
+			comp->type = cmd_list;
+			comp->start = i+1;
+			comp->count = 0;
+			braces += 1;
+		}
 		else if(cmd[0] == '@') {
 			assert(var_count < MAX_VARS);
 			var_names[var_count] = cmd+1;
-			var_data[var_count] = pop();
+			var_data[var_count] = pop(0);
 			var_count += 1;
+			free(comp);
 			continue;
 		}
 		else if(0 == strcmp(cmd, "sin")) {
@@ -216,6 +251,7 @@ float* execute(float sample_period, int sample_count) {
 			}
 			if(found) {
 				push(found);
+				free(comp);
 				continue;
 			}
 			fprintf(stderr, "unknown command: [%s]\n", cmd);
@@ -225,13 +261,11 @@ float* execute(float sample_period, int sample_count) {
 		//grab args
 		comp->inputs = (component**)malloc(arg_count*sizeof(component*));
 		for(int arg = 0; arg < arg_count; ++arg) {
-			comp->inputs[arg] = pop();
+			comp->inputs[arg] = pop(1);
 		}
 
 		push(comp);
 	}
-
-	return eval(pop(), sample_period, sample_count);
 }
 
 void tokenize(FILE* in) {
@@ -259,13 +293,15 @@ int main(int argc, char** argv) {
 	static const uint32_t sample_rate = 44100;
 	static const float fsample_rate = (float)sample_rate;
 	static const float fsample_period = 1/fsample_rate;
-	uint32_t sample_count = (uint32_t)(sample_rate * duration);
+	sample_count = (int)(sample_rate * duration);
 	uint32_t data_size = sample_count *bytes_per_sample * channels;
 
 	//run the program
 	tokenize(in);
 	var_count = 0;
-	float* fdata = execute(fsample_period, sample_count);
+	sample_period = fsample_period;
+	execute(0, token_count);
+	float* fdata = eval(pop(1));
 	assert(stack_count == 0 && "stack is not empty. this is probably wrong");
 
 	//write WAV file
