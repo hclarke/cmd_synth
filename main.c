@@ -8,6 +8,7 @@
 #define MAX_TOKENS 2048
 #define MAX_TOKEN_LEN 80
 #define MAX_STACK 256
+#define MAX_VARS 2048
 
 void putu32(FILE* f, uint32_t x) {
 	for(int i = 0; i < 4; ++i) {
@@ -64,6 +65,10 @@ void push(component* comp) {
 	stack[stack_count] = comp;
 	stack_count += 1;
 }
+
+component* var_data[MAX_VARS];
+char* var_names[MAX_VARS];
+int var_count;
 
 float* eval(component* comp, float sample_period, int sample_count);
 float* alloc_buffer(int sample_count) {
@@ -179,6 +184,13 @@ float* execute(float sample_period, int sample_count) {
 		if(1 == sscanf(cmd, "%f", &comp->value)) {
 			comp->type = constant;
 		}
+		else if(cmd[0] == '@') {
+			assert(var_count < MAX_VARS);
+			var_names[var_count] = cmd+1;
+			var_data[var_count] = pop();
+			var_count += 1;
+			continue;
+		}
 		else if(0 == strcmp(cmd, "sin")) {
 			comp->type = sin_wave;
 			arg_count = 1; //frequency
@@ -196,6 +208,16 @@ float* execute(float sample_period, int sample_count) {
 			arg_count = 4; 
 		}
 		else {
+			component* found = NULL;
+			for(int v = 0; v < var_count; ++v) {
+				if(0 == strcmp(cmd, var_names[v])) {
+					found = var_data[v];
+				}
+			}
+			if(found) {
+				push(found);
+				continue;
+			}
 			fprintf(stderr, "unknown command: [%s]\n", cmd);
 			assert(0 && "unknown command");
 		}
@@ -242,6 +264,7 @@ int main(int argc, char** argv) {
 
 	//run the program
 	tokenize(in);
+	var_count = 0;
 	float* fdata = execute(fsample_period, sample_count);
 	assert(stack_count == 0 && "stack is not empty. this is probably wrong");
 
