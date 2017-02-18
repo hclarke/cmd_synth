@@ -31,6 +31,7 @@ typedef enum {
 	add,
 	adsr,
 	cmd_list,
+	fexp,
 } component_type;
 
 typedef struct component {
@@ -109,6 +110,16 @@ float* eval_sin_wave(component* comp) {
 	return b;
 }
 
+float* eval_exp(component* comp) {
+	float* b = comp->buffer = alloc_buffer(sample_count);
+	float* f = eval(comp->inputs[0]);
+
+	for(int i = 0; i < sample_count; ++i) {
+		b[i] = exp2(f[i]/12.0);
+	}
+	return b;
+}
+
 float* eval_mul(component* comp) {
 	float* b = comp->buffer = alloc_buffer(sample_count);
 	float* i0 = eval(comp->inputs[0]);
@@ -179,6 +190,8 @@ float* eval(component* comp) {
 			return eval_sin_wave(comp);
 		case mul:
 			return eval_mul(comp);
+		case fexp:
+			return eval_exp(comp);
 		case add:
 			return eval_add(comp);
 		case adsr:
@@ -228,15 +241,19 @@ void execute(int start, int count) {
 		}
 		else if(0 == strcmp(cmd, "sin")) {
 			comp->type = sin_wave;
-			arg_count = 1; //frequency
+			arg_count = 1;
 		}
 		else if(0 == strcmp(cmd, "mul")) {
 			comp->type = mul;
-			arg_count = 2; //frequency
+			arg_count = 2;
+		}
+		else if(0 == strcmp(cmd, "exp")) {
+			comp->type = fexp;
+			arg_count = 1; 
 		}
 		else if(0 == strcmp(cmd, "add")) {
 			comp->type = add;
-			arg_count = 2; //frequency
+			arg_count = 2;
 		}
 		else if(0 == strcmp(cmd, "adsr")) {
 			comp->type = adsr;
