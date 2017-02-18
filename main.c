@@ -252,6 +252,9 @@ void execute(int start, int count) {
 			if(found) {
 				push(found);
 				free(comp);
+				if(found->type == cmd_list) {
+					push(pop(1)); //force cmd list to execute
+				}
 				continue;
 			}
 			fprintf(stderr, "unknown command: [%s]\n", cmd);
