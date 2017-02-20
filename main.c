@@ -9,6 +9,7 @@
 #define MAX_TOKEN_LEN 80
 #define MAX_STACK 256
 #define MAX_VARS 2048
+#define MAX_OPS 256
 
 void putu32(FILE* f, uint32_t x) {
 	for(int i = 0; i < 4; ++i) {
@@ -24,24 +25,62 @@ void putu16(FILE* f, uint16_t x) {
 	}
 }
 
+float sample_period;
+int sample_count;
+typedef struct component component;
+typedef float* (*synth_op)(component*);
 typedef enum {
 	constant,
-	sin_wave,
-	mul,
-	add,
-	adsr,
+	operator,
 	cmd_list,
-	fexp,
-	flog,
 } component_type;
 
-typedef struct component {
+struct component {
 	component_type type;
+	int opcode;
 	float value; //constants only
 	int start,count; //cmd_list only
 	struct component** inputs;
 	float* buffer;
-} component;
+};
+float* eval(component* comp);
+float* alloc_buffer(int sample_count);
+
+#define SYNTH_OP_NAME(name) name##_op_name
+#define SYNTH_OP_DESC(name) name##_op_desc
+#define SYNTH_OP_FUNC(name) name##_op_func
+#define SYNTH_OP_ARGS(name) name##_op_args
+#define SYNTH_OP_ITER(name) name##_op_iter
+#define ARG(index) synth_op_args[index]
+#define DEF_SYNTH_OP(name, desc, argc, state_type, state_init) \
+char* SYNTH_OP_NAME(name) = #name;\
+char* SYNTH_OP_DESC(name) = #desc;\
+int   SYNTH_OP_ARGS(name) = argc;\
+float SYNTH_OP_ITER(name)(float** synth_op_args,int i,state_type* state); \
+float* SYNTH_OP_FUNC(name) (component* comp) {\
+	float* b = comp->buffer = (float*)malloc(sizeof(float)*sample_count);\
+	float* synth_op_args[argc]; \
+	for(int i = 0; i < argc; ++i) { \
+		synth_op_args[i] = eval(comp->inputs[i]);\
+	}\
+	state_type state = state_init;\
+	for(int i = 0; i < sample_count; ++i) b[i] = SYNTH_OP_ITER(name)(synth_op_args,i,&state);\
+	return b;\
+}\
+float SYNTH_OP_ITER(name)(float** synth_op_args,int i, state_type* state)
+
+int op_count = 0;
+char* op_names[MAX_OPS];
+char* op_descs[MAX_OPS];
+synth_op op_funcs[MAX_OPS];
+int op_args[MAX_OPS];
+#define REG_SYNTH_OP(name) do {\
+	op_names[op_count] = SYNTH_OP_NAME(name);\
+	op_descs[op_count] = SYNTH_OP_DESC(name);\
+	op_funcs[op_count] = SYNTH_OP_FUNC(name);\
+	op_args[op_count] = SYNTH_OP_ARGS(name);\
+	op_count += 1;\
+} while(0)
 
 int token_count;
 char program_data[MAX_TOKENS*MAX_TOKEN_LEN];
@@ -52,8 +91,6 @@ char* get_cmd(int i) {
 
 int stack_count = 0;
 component* stack[MAX_STACK];
-float sample_period;
-int sample_count;
 
 void execute(int start, int count);
 
@@ -85,7 +122,41 @@ component* var_data[MAX_VARS];
 char* var_names[MAX_VARS];
 int var_count;
 
-float* eval(component* comp);
+DEF_SYNTH_OP(sub, "subtracts two waveforms", 2, float, 0) {
+	return ARG(0)[i] - ARG(1)[i];
+}
+
+DEF_SYNTH_OP(add, "add two waveforms", 2, float, 0) {
+	return ARG(0)[i] + ARG(1)[i];
+}
+
+DEF_SYNTH_OP(sin, "generate a sine wave", 1, float, 0) {
+	float x = sin(*state);
+	*state += 2.0*3.14159*sample_period*ARG(0)[i];
+	return x;
+}
+DEF_SYNTH_OP(log, "take the log of each sample. base 2^(1/12)", 1, float, 0) {
+	return log2(ARG(0)[i])*12.0;
+}
+
+DEF_SYNTH_OP(exp, "take the exp of each sample. base 2^(1/12)", 1, float, 0) {
+	return exp2(ARG(0)[i]/12.0);
+}
+
+DEF_SYNTH_OP(clip, "clamp each sample to the [-1,1] range", 1, float, 0) {
+	return fmax(-1,fmin(1,ARG(0)[i]));
+}
+
+
+void register_ops() {
+	REG_SYNTH_OP(sub);
+	REG_SYNTH_OP(add);
+	REG_SYNTH_OP(sin);
+	REG_SYNTH_OP(log);
+	REG_SYNTH_OP(exp);
+	REG_SYNTH_OP(clip);
+}
+
 float* alloc_buffer(int sample_count) {
 	return (float*)malloc(sizeof(float) * sample_count);
 }
@@ -99,97 +170,6 @@ float* eval_constant(component* comp) {
 	return b;
 }
 
-float* eval_sin_wave(component* comp) {
-	float* b = comp->buffer = alloc_buffer(sample_count);
-	float* f = eval(comp->inputs[0]);
-	float t = 0;
-
-	for(int i = 0; i < sample_count; ++i) {
-		t += 2 * 3.14159 * f[i] * sample_period;
-		b[i] = sin(t);
-	}
-	return b;
-}
-
-float* eval_exp(component* comp) {
-	float* b = comp->buffer = alloc_buffer(sample_count);
-	float* f = eval(comp->inputs[0]);
-
-	for(int i = 0; i < sample_count; ++i) {
-		b[i] = exp2(f[i]/12.0);
-	}
-	return b;
-}
-
-float* eval_log(component* comp) {
-	float* b = comp->buffer = alloc_buffer(sample_count);
-	float* f = eval(comp->inputs[0]);
-
-	for(int i = 0; i < sample_count; ++i) {
-		b[i] = log2(f[i])*12.0;
-	}
-	return b;
-}
-
-float* eval_mul(component* comp) {
-	float* b = comp->buffer = alloc_buffer(sample_count);
-	float* i0 = eval(comp->inputs[0]);
-	float* i1 = eval(comp->inputs[1]);
-
-	for(int i = 0; i < sample_count; ++i) {
-		b[i] = i0[i] * i1[i];
-	}
-	return b;
-}
-
-float* eval_add(component* comp) {
-	float* b = comp->buffer = alloc_buffer(sample_count);
-	float* i0 = eval(comp->inputs[0]);
-	float* i1 = eval(comp->inputs[1]);
-
-	for(int i = 0; i < sample_count; ++i) {
-		b[i] = i0[i] + i1[i];
-	}
-	return b;
-}
-
-float* eval_adsr(component* comp) {
-	float* b = comp->buffer = alloc_buffer(sample_count);
-	float* A = eval(comp->inputs[3]);
-	float* D = eval(comp->inputs[2]);
-	float* S = eval(comp->inputs[1]);
-	float* R = eval(comp->inputs[0]);
-
-	float duration = sample_period * sample_count;
-
-	for(int i = 0; i < sample_count; ++i) {
-		float a = A[i];
-		float d = D[i];
-		float s = S[i];
-		float r = R[i];
-
-		float t = sample_period * i;
-
-		if(t < a) {
-			b[i] = t/a;
-		}
-		else if(t < a+d) {
-			float u = (t-a)/d;
-
-			b[i] = s*u + 1 - u;
-		}
-		else if(t > duration - r) {
-			float u = (duration-t)/r;
-
-			b[i] = s * u;
-		}
-		else {
-			b[i] = s;
-		}
-	}
-	return b;
-}
-
 float* eval(component* comp) {
 	if(comp->buffer) {
 		return comp->buffer;
@@ -197,18 +177,8 @@ float* eval(component* comp) {
 	switch(comp->type) {
 		case constant:
 			return eval_constant(comp);
-		case sin_wave:
-			return eval_sin_wave(comp);
-		case mul:
-			return eval_mul(comp);
-		case fexp:
-			return eval_exp(comp);
-		case flog:
-			return eval_log(comp);
-		case add:
-			return eval_add(comp);
-		case adsr:
-			return eval_adsr(comp);
+		case operator:
+			return op_funcs[comp->opcode](comp);
 		case cmd_list:
 			assert(0);
 		default:
@@ -252,33 +222,9 @@ void execute(int start, int count) {
 			free(comp);
 			continue;
 		}
-		else if(0 == strcmp(cmd, "sin")) {
-			comp->type = sin_wave;
-			arg_count = 1;
-		}
-		else if(0 == strcmp(cmd, "mul")) {
-			comp->type = mul;
-			arg_count = 2;
-		}
-		else if(0 == strcmp(cmd, "exp")) {
-			comp->type = fexp;
-			arg_count = 1; 
-		}
-		else if(0 == strcmp(cmd, "log")) {
-			comp->type = flog;
-			arg_count = 1; 
-		}
-		else if(0 == strcmp(cmd, "add")) {
-			comp->type = add;
-			arg_count = 2;
-		}
-		else if(0 == strcmp(cmd, "adsr")) {
-			comp->type = adsr;
-			arg_count = 4; 
-		}
 		else {
 			component* found = NULL;
-			for(int v = 0; v < var_count; ++v) {
+			for(int v = 0; !found && v < var_count; ++v) {
 				if(0 == strcmp(cmd, var_names[v])) {
 					found = var_data[v];
 				}
@@ -291,13 +237,31 @@ void execute(int start, int count) {
 				}
 				continue;
 			}
-			fprintf(stderr, "unknown command: [%s]\n", cmd);
-			assert(0 && "unknown command");
+
+			int found_op = -1;
+			for(int o = 0; o < op_count; ++o) {
+				if(0 == strcmp(cmd, op_names[o])) {
+					found_op = o;
+					break;
+				}
+			}
+
+			if(found_op >= 0) {
+				comp->type = operator;
+				comp->opcode = found_op;
+				arg_count = op_args[found_op];
+			}
+			else {
+				fprintf(stderr, "unknown command: [%s]\n", cmd);
+				assert(0 && "unknown command");
+			}
 		}
+
+
 
 		//grab args
 		comp->inputs = (component**)malloc(arg_count*sizeof(component*));
-		for(int arg = 0; arg < arg_count; ++arg) {
+		for(int arg = arg_count-1; arg >= 0; --arg) {
 			comp->inputs[arg] = pop(1);
 		}
 
@@ -337,6 +301,7 @@ int main(int argc, char** argv) {
 	tokenize(in);
 	var_count = 0;
 	sample_period = fsample_period;
+	register_ops();
 	execute(0, token_count);
 	float* fdata = eval(pop(1));
 	assert(stack_count == 0 && "stack is not empty. this is probably wrong");
