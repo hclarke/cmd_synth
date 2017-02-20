@@ -18,6 +18,10 @@ to display all of the commands available:
 
 ```synth --help```
 
+playing a sound (OSX):
+
+```echo "440 sin" | synth 1 > tmp.wav && afplay tmp.wav```
+
 ## example inputs
 
 A440:
