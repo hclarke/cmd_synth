@@ -44,7 +44,6 @@ struct component {
 	float* buffer;
 };
 float* eval(component* comp);
-float* alloc_buffer(int sample_count);
 
 #define SYNTH_OP_NAME(name) name##_op_name
 #define SYNTH_OP_DESC(name) name##_op_desc
@@ -129,6 +128,12 @@ DEF_SYNTH_OP(sub, "subtracts two waveforms", 2, float, 0) {
 DEF_SYNTH_OP(add, "add two waveforms", 2, float, 0) {
 	return ARG(0)[i] + ARG(1)[i];
 }
+DEF_SYNTH_OP(mul, "multiply two waveforms componentwise", 2, float, 0) {
+	return ARG(0)[i] * ARG(1)[i];
+}
+DEF_SYNTH_OP(abs, "add two waveforms", 1, float, 0) {
+	return abs(ARG(0)[i]);
+}
 
 DEF_SYNTH_OP(sin, "generate a sine wave", 1, float, 0) {
 	float x = sin(*state);
@@ -151,18 +156,16 @@ DEF_SYNTH_OP(clip, "clamp each sample to the [-1,1] range", 1, float, 0) {
 void register_ops() {
 	REG_SYNTH_OP(sub);
 	REG_SYNTH_OP(add);
+	REG_SYNTH_OP(mul);
+	REG_SYNTH_OP(abs);
 	REG_SYNTH_OP(sin);
 	REG_SYNTH_OP(log);
 	REG_SYNTH_OP(exp);
 	REG_SYNTH_OP(clip);
 }
 
-float* alloc_buffer(int sample_count) {
-	return (float*)malloc(sizeof(float) * sample_count);
-}
-
 float* eval_constant(component* comp) {
-	float* b = comp->buffer = alloc_buffer(sample_count);
+	float* b = comp->buffer = (float*)malloc(sizeof(float)*sample_count);
 	float value = comp->value;
 	for(int i = 0; i < sample_count; ++i) {
 		b[i] = value;
@@ -220,6 +223,15 @@ void execute(int start, int count) {
 			var_data[var_count] = pop(0);
 			var_count += 1;
 			free(comp);
+			continue;
+		}
+		else if(cmd[0] == '%') { //pull nth to top of stack
+			int index = atoi(cmd+1);
+			for(int si = stack_count-index; si < stack_count; ++si) {
+				component* temp = stack[si];
+				stack[si] = stack[si-1];
+				stack[si-1] = temp;
+			}
 			continue;
 		}
 		else {
