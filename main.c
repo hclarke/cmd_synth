@@ -142,6 +142,12 @@ DEF_SYNTH_OP(sin, "generate a sine wave", 1, float, 0) {
 	*state += 2.0*3.14159*sample_period*ARG(0)[i];
 	return x;
 }
+
+DEF_SYNTH_OP(saw, "generate a sine wave", 1, float, 0) {
+	float x = *state;
+	*state += sample_period*ARG(0)[i];
+	return (x-floor(x))*2-1;
+}
 DEF_SYNTH_OP(log, "take the log of each sample. base 2^(1/12)", 1, float, 0) {
 	return log2(ARG(0)[i])*12.0;
 }
@@ -169,8 +175,39 @@ DEF_SYNTH_OP(neg, "mirrors the input around 0", 1, float, 0) {
 DEF_SYNTH_OP(time, "current time. each sample has its time as its value", 0, float, 0) {
 	return i*sample_period;
 }
-DEF_SYNTH_OP(length, "clip duration. each sample is clip duration in seconds", 0, float, 0) {
+DEF_SYNTH_OP(length, "clip duration. each sample is clip duration in seconds	", 0, float, 0) {
 	return sample_count*sample_period;
+}
+DEF_SYNTH_OP(lowpass, "low pass filter. uses second input as frequency cutoff", 2, float, ARG(0)[0]) {
+	float tau = 1/(ARG(1)[i]*2*3.14159);
+	float alpha = sample_period / (tau+sample_period);
+	return *state = alpha*ARG(0)[i] + (1-alpha)* *state;
+}
+DEF_SYNTH_OP(adsr, "ADSR envelope", 4, float, 0) {
+	float a = ARG(0)[i];
+	float d = ARG(1)[i];
+	float s = ARG(2)[i];
+	float r = ARG(3)[i];
+
+	float t = sample_period * i;
+	float duration = sample_period * sample_count;
+
+	if(t < a) {
+		return t/a;
+	}
+	else if(t < a+d) {
+		float u = (t-a)/d;
+
+		return s*u + 1 - u;
+	}
+	else if(t > duration - r) {
+		float u = (duration-t)/r;
+
+		return s * u;
+	}
+	else {
+		return s;
+	}
 }
 
 
@@ -181,6 +218,7 @@ void register_ops() {
 	REG_SYNTH_OP(div);
 	REG_SYNTH_OP(abs);
 	REG_SYNTH_OP(sin);
+	REG_SYNTH_OP(saw);
 	REG_SYNTH_OP(log);
 	REG_SYNTH_OP(exp);
 	REG_SYNTH_OP(clip);
@@ -190,6 +228,8 @@ void register_ops() {
 	REG_SYNTH_OP(lt);
 	REG_SYNTH_OP(not);
 	REG_SYNTH_OP(neg);
+	REG_SYNTH_OP(lowpass);
+	REG_SYNTH_OP(adsr);
 }
 
 float* eval_constant(component* comp) {
