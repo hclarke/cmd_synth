@@ -131,10 +131,12 @@ DEF_SYNTH_OP(add, "add two waveforms", 2, float, 0) {
 DEF_SYNTH_OP(mul, "multiply two waveforms componentwise", 2, float, 0) {
 	return ARG(0)[i] * ARG(1)[i];
 }
+DEF_SYNTH_OP(div, "divide two waveforms componentwise", 2, float, 0) {
+	return ARG(0)[i] / ARG(1)[i];
+}
 DEF_SYNTH_OP(abs, "add two waveforms", 1, float, 0) {
 	return abs(ARG(0)[i]);
 }
-
 DEF_SYNTH_OP(sin, "generate a sine wave", 1, float, 0) {
 	float x = sin(*state);
 	*state += 2.0*3.14159*sample_period*ARG(0)[i];
@@ -152,16 +154,42 @@ DEF_SYNTH_OP(clip, "clamp each sample to the [-1,1] range", 1, float, 0) {
 	return fmax(-1,fmin(1,ARG(0)[i]));
 }
 
+DEF_SYNTH_OP(gt, "1 if A>B, 0 otherwise", 2, float, 0) {
+	return (float)(ARG(0)[i] > ARG(1)[i]);
+}
+DEF_SYNTH_OP(lt, "1 if A>B, 0 otherwise", 2, float, 0) {
+	return (float)(ARG(0)[i] < ARG(1)[i]);
+}
+DEF_SYNTH_OP(not, "mirrors the input around 0.5", 1, float, 0) {
+	return 1-ARG(0)[i];
+}
+DEF_SYNTH_OP(neg, "mirrors the input around 0", 1, float, 0) {
+	return -ARG(0)[i];
+}
+DEF_SYNTH_OP(time, "current time. each sample has its time as its value", 0, float, 0) {
+	return i*sample_period;
+}
+DEF_SYNTH_OP(length, "clip duration. each sample is clip duration in seconds", 0, float, 0) {
+	return sample_count*sample_period;
+}
+
 
 void register_ops() {
 	REG_SYNTH_OP(sub);
 	REG_SYNTH_OP(add);
 	REG_SYNTH_OP(mul);
+	REG_SYNTH_OP(div);
 	REG_SYNTH_OP(abs);
 	REG_SYNTH_OP(sin);
 	REG_SYNTH_OP(log);
 	REG_SYNTH_OP(exp);
 	REG_SYNTH_OP(clip);
+	REG_SYNTH_OP(time);
+	REG_SYNTH_OP(length);
+	REG_SYNTH_OP(gt);
+	REG_SYNTH_OP(lt);
+	REG_SYNTH_OP(not);
+	REG_SYNTH_OP(neg);
 }
 
 float* eval_constant(component* comp) {
@@ -234,6 +262,10 @@ void execute(int start, int count) {
 			}
 			continue;
 		}
+		else if(0 == strcmp(cmd, "dup")) {
+			push(peek());
+			continue;
+		}
 		else {
 			component* found = NULL;
 			for(int v = 0; !found && v < var_count; ++v) {
@@ -290,15 +322,55 @@ void tokenize(FILE* in) {
 	}
 }
 
+int check_args(int argc, char** argv, float* duration) {
+	if(argc == 1) {
+		fprintf(stderr, "%s\n", 
+			"pass the duration (in seconds) as the sole command-line argument, or --help for a list of commands"
+		);
+		return 0;
+	}
+	assert(argc <= 2 && "too many arguments");
+
+	if(1==sscanf(argv[1], "%f", duration)) {
+		return 1;
+	}
+
+	if(0 == strcmp(argv[1], "--help")) {
+		fprintf(stderr, "%s\n", "reads commands from stdin and executes them in reverse polish notation");
+		fprintf(stderr, "\n");
+		fprintf(stderr, "%s\n", "store/load:");
+		fprintf(stderr, "\t%s\n", "@foo will store the last result to variable foo");
+		fprintf(stderr, "\t%s\n", "then foo will load it");
+		fprintf(stderr, "\n");
+		fprintf(stderr, "%s\n", "reordering:");
+		fprintf(stderr, "\t%s\n", "%n, for any integer n, will pull the nth most recent result");
+		fprintf(stderr, "\t%s\n", "eg. \"1 2 3 %2\" will result in \"2 3 1\"");
+		fprintf(stderr, "\n");
+		fprintf(stderr, "%s\n", "duplication:");
+		fprintf(stderr, "\t%s\n", "dup will duplicate the last result");
+		fprintf(stderr, "\t%s\n", "eg. \"1 2 dup\" will result in \"1 2 2\"");
+		fprintf(stderr, "\n");
+		fprintf(stderr, "%s\n", "command lists:");
+		fprintf(stderr, "\t%s\n", "'[' starts a command list, and ']' ends it");
+		fprintf(stderr, "\t%s\n", "example \"[ 2 mul ] @double\")");
+		fprintf(stderr, "\n");
+		fprintf(stderr, "%s\n", "commands:");
+		for(int i = 0; i < op_count; ++i) {
+			fprintf(stderr, "\t%-10s (%d) -- %s \n", op_names[i], op_args[i], op_descs[i]);
+		}
+		return 0;
+	}
+	return 0;
+}
 int main(int argc, char** argv) {
+	register_ops();
+	float duration;
+	if(!check_args(argc, argv, &duration)) {
+		return 0;
+	}
 	int res;
 	FILE* in = stdin;
 
-	//get duration from arg
-	assert(argc == 2);
-	float duration;
-	res=sscanf(argv[1], "%f", &duration);
-	assert(res == 1);
 
 	//set up sample rate and such
 	static const uint16_t channels = 1;
@@ -313,7 +385,6 @@ int main(int argc, char** argv) {
 	tokenize(in);
 	var_count = 0;
 	sample_period = fsample_period;
-	register_ops();
 	execute(0, token_count);
 	float* fdata = eval(pop(1));
 	assert(stack_count == 0 && "stack is not empty. this is probably wrong");
